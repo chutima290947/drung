@@ -1,0 +1,214 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { CLINICS, USAGE } from './data.js'
+import { api } from './api.js'
+import { DEFAULTS, summarize, thDate, EXP_LABEL, short, drugMap } from './utils.js'
+import Sidebar from './components/Sidebar.jsx'
+import TopBar from './components/TopBar.jsx'
+import Drawer from './components/Drawer.jsx'
+import AddItemModal from './components/AddItemModal.jsx'
+import SettingsModal from './components/SettingsModal.jsx'
+import DashboardPage from './pages/DashboardPage.jsx'
+import InventoryPage from './pages/InventoryPage.jsx'
+import UsagePage from './pages/UsagePage.jsx'
+import AlertsPage from './pages/AlertsPage.jsx'
+import { card, btnGhost, btnPrimary } from './classes.js'
+
+const EMPTY_FORM = { code: '', clinic: CLINICS[0], qty: '', lot: '', exp: '' }
+
+
+export default function App() {
+  const [tab, setTab] = useState('dash')
+  const [clinic, setClinic] = useState('all')
+  const [q, setQ] = useState('')
+  const [cfg, setCfg] = useState(DEFAULTS)
+  const [draft, setDraft] = useState(cfg)
+  const [saved, setSaved] = useState(false)
+  const [showCfg, setShowCfg] = useState(false)
+  const [lots, setLots] = useState([])
+  const [notes, setNotes] = useState({})
+  const [status, setStatus] = useState('loading') // loading | ok | error
+  const [errMsg, setErrMsg] = useState('')
+  const [toast, setToast] = useState('')
+  const [master, setMaster] = useState(null)
+  const [checking, setChecking] = useState(false)
+  const [sugg, setSugg] = useState([])
+  const [sel, setSel] = useState(null)
+  const [adding, setAdding] = useState(false)
+  const [form, setForm] = useState(EMPTY_FORM)
+  const [fs, setFs] = useState('all')
+  const [uf, setUf] = useState('all')
+
+  const notify = (m) => { setToast(m); setTimeout(() => setToast(''), 3500) }
+  const lotsRef = useRef(lots); lotsRef.current = lots
+  const noteTimers = useRef({})
+
+  // โหลดข้อมูลทั้งหมดจาก backend (Lot, ยอดจ่ายยา, ค่าตั้งเกณฑ์, หมายเหตุ)
+  const loadAll = useCallback(async () => {
+    try {
+      const [rowsL, rowsU, st] = await Promise.all([api.lots(), api.usage(), api.settings()])
+      const byCode = Object.fromEntries(CLINICS.map((n) => [short(n), n]))
+      Object.keys(USAGE).forEach((k) => delete USAGE[k])
+      Object.keys(drugMap).forEach((k) => delete drugMap[k])
+      const nn = {}
+      rowsU.forEach((u) => {
+        const n = byCode[u.clinic_code]; if (!n) return
+        USAGE[`${n}|${u.drug_code}`] = { out30: u.out30, out90: u.out90, out180: u.out180 }
+        if (u.note) nn[`${n}|${u.drug_code}`] = u.note
+      })
+      const L = rowsL.filter((r) => byCode[r.clinic_code]).map((r) => {
+        drugMap[r.drug_code] = { code: r.drug_code, name: r.drug_name, unit: r.unit, price: Number(r.unit_price) }
+        const c = byCode[r.clinic_code]
+        if (r.note) nn[`${c}|${r.lot_no}`] = r.note
+        return { id: r.id, clinic: c, code: r.drug_code, lot: r.lot_no, qty: r.qty, exp: String(r.expiry_date).slice(0, 10) }
+      })
+      setCfg({ ...DEFAULTS, ...st }); setLots(L); setNotes(nn); setStatus('ok')
+    } catch (e) { setErrMsg(e.message); setStatus('error') }
+  }, [])
+  useEffect(() => { loadAll() }, [loadAll])
+
+  // ค้นรหัสยาจากฐานข้อมูลตอนพิมพ์ (ไม่ดึงทั้งหมด)
+  useEffect(() => {
+    const c = form.code.trim().toUpperCase()
+    if (!c) { setMaster(null); setSugg([]); setChecking(false); return }
+    setChecking(true)
+    const t = setTimeout(async () => {
+      try { const d = await api.drug(c); setMaster({ code: d.code, name: d.name, unit: d.unit, price: Number(d.unit_price) }) } catch { setMaster(null) }
+      setChecking(false)
+      api.drugs(c).then(setSugg).catch(() => setSugg([]))
+    }, 250)
+    return () => clearTimeout(t)
+  }, [form.code])
+
+  // หมายเหตุ: พิมพ์แล้วหน่วงนิดหนึ่งค่อยบันทึกลงฐานข้อมูล
+  const saveNote = (key, text) => {
+    const lot = lotsRef.current.find((l) => `${l.clinic}|${l.lot}` === key)
+    const job = lot ? api.noteLot(lot.id, text) : (() => { const i = key.indexOf('|'); return api.noteDrug(short(key.slice(0, i)), key.slice(i + 1), text) })()
+    job.catch((e) => notify('บันทึกหมายเหตุไม่สำเร็จ: ' + e.message))
+  }
+  const setNotesApi = (next) => {
+    const k = Object.keys(next).find((x) => next[x] !== notes[x])
+    setNotes(next)
+    if (!k) return
+    clearTimeout(noteTimers.current[k])
+    noteTimers.current[k] = setTimeout(() => saveNote(k, next[k] || ''), 600)
+  }
+
+  const all = useMemo(() => summarize(lots, cfg), [lots, cfg])
+  const rowMap = useMemo(() => Object.fromEntries(all.map((r) => [r.key, r])), [all])
+  const rows = useMemo(
+    () => all.filter((r) => (clinic === 'all' || r.clinic === clinic) && (r.drug.name + r.drug.code).toLowerCase().includes(q.toLowerCase())),
+    [all, clinic, q]
+  )
+  const lotRows = rows.flatMap((r) => r.lots.map((l) => ({ ...l, drug: r.drug, key: r.key })))
+    .sort((a, b) => new Date(a.exp) - new Date(b.exp))
+  const by = (s) => lotRows.filter((l) => l.status === s)
+  const cnt = (s) => by(s).length
+  const qty = (s) => by(s).reduce((a, l) => a + l.qty, 0)
+  const val = (s) => by(s).reduce((a, l) => a + l.qty * l.drug.price, 0)
+  const total = rows.reduce((a, r) => a + r.value, 0)
+  const empty = status === 'ok' && lots.length === 0
+  const T = (k) => status === 'ok' && !empty && tab === k
+  const go = (t, o = {}) => { setTab(t); if (o.c) setClinic(o.c); if (o.f) setFs(o.f); if (o.u) setUf(o.u) }
+
+  // สถิติรายคลินิก (ไม่ขึ้นกับตัวกรอง)
+  const stat = CLINICS.map((c) => {
+    const r = all.filter((x) => x.clinic === c), ls = r.flatMap((x) => x.lots)
+    const n = (s) => ls.filter((l) => l.status === s).length
+    return { c, items: r.length, ex: n('expired'), rd: n('red'), or: n('orange'), os: r.filter((x) => x.overstock && !x.noMove).length,
+      nm: r.filter((x) => x.noMove).length, val: r.reduce((a, x) => a + x.value, 0), use: r.reduce((a, x) => a + x.avg, 0) }
+  })
+  const sum = (k) => stat.reduce((a, s) => a + s[k], 0)
+  const risk = [...stat].sort((a, b) => b.ex * 5 + b.rd - (a.ex * 5 + a.rd))[0]
+  const busy = [...stat].filter((s) => s.c !== risk.c).sort((a, b) => b.use - a.use)[0]
+  const where = (s) => [...new Set(by(s).map((l) => short(l.clinic)))].join(', ') || '—'
+
+  const dup = lots.some((l) => l.clinic === form.clinic && l.lot === form.lot.trim())
+  const formOk = master && +form.qty > 0 && form.lot.trim() && form.exp && !dup
+  const addItem = async () => {
+    if (!formOk) return
+    try {
+      await api.addLot({ clinic: short(form.clinic), code: master.code, lot: form.lot.trim(), qty: +form.qty, exp: form.exp })
+      await loadAll()
+      setForm({ ...EMPTY_FORM, clinic: form.clinic }); setAdding(false); notify('เพิ่มรายการแล้ว')
+    } catch (e) { notify('เพิ่มไม่สำเร็จ: ' + e.message) }
+  }
+  const del = async (l) => {
+    if (!confirm(`ลบ Lot ${l.lot} (${l.drug.name}) ?`)) return
+    try { await api.delLot(l.id); await loadAll() } catch (e) { notify('ลบไม่สำเร็จ: ' + e.message) }
+  }
+  const F = (k) => (e) => setForm({ ...form, [k]: e.target.value })
+  const exportCsv = () => {
+    const head = ['รหัสยา', 'ยา', 'คลินิก', 'Lot', 'คงเหลือ', 'มูลค่า', 'Exp', 'สถานะ Exp']
+    const body = lotRows.map((l) => [l.code, l.drug.name, l.clinic, l.lot, l.qty, l.qty * l.drug.price, l.exp, EXP_LABEL[l.status] || 'ปกติ'])
+    const csv = '\ufeff' + [head, ...body].map((r) => r.map((v) => `"${v}"`).join(',')).join('\n')
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = 'drug-inventory.csv'; a.click()
+  }
+
+  const setC = (k) => (e) => { setSaved(false); setDraft({ ...draft, [k]: +e.target.value }) }
+  const dirty = JSON.stringify(draft) !== JSON.stringify(cfg)
+  const err = Object.values(draft).some((v) => !(v > 0)) ? 'ทุกช่องต้องเป็นตัวเลขมากกว่า 0'
+    : draft.orangeMonths <= draft.redMonths ? 'จำนวนเดือนสีส้มต้องมากกว่าสีแดง' : ''
+  const save = async () => {
+    if (err) return
+    try { await api.saveSettings(draft); setCfg(draft); setSaved(true) } catch (e) { notify('บันทึกค่าตั้งเกณฑ์ไม่สำเร็จ: ' + e.message) }
+  }
+
+  const titles = { dash: `สรุปภาพรวมคลังเวชภัณฑ์ คลินิก ${CLINICS.length} สาขา`, inv: 'ทะเบียนยาคงคลังแยกตาม Lot', use: 'วิเคราะห์อัตราการใช้ยา', alert: 'แจ้งเตือนเวชภัณฑ์' }
+  const d = { cfg, rows, all, rowMap, lotRows, by, cnt, qty, val, total, stat, sum, risk, busy, where, go, clinic, fs, setFs, uf, setUf, notes, setNotes: setNotesApi, setSel, del }
+  return (
+    <div className="flex min-h-screen print:block">
+      <Sidebar tab={tab} setTab={setTab} badge={cnt('expired') + cnt('red')} />
+
+      <div className="flex-1 min-w-0 flex flex-col">
+        <TopBar clinic={clinic} setClinic={setClinic} q={q} setQ={setQ} onSettings={() => { setDraft(cfg); setSaved(false); setShowCfg(true) }} onAdd={() => setAdding(true)} />
+
+        <main className="px-6 pt-[22px] pb-9 flex-1 max-[1000px]:px-3 max-[1000px]:pt-4 max-[1000px]:pb-4">
+          <div className="flex justify-between items-center flex-wrap gap-2.5 mb-[18px]">
+            <div><h2 className="text-[22px] font-semibold">{titles[tab]}</h2>{tab !== 'dash' && <small className="text-mut">{clinic === 'all' ? `ทุกคลินิก (${CLINICS.length} สาขา)` : clinic}</small>}</div>
+          </div>
+
+          {status === 'loading' && <div className="py-20 text-center text-mut">กำลังโหลดข้อมูลจากฐานข้อมูล...</div>}
+          {status === 'error' && (
+            <div className={`${card} bg-white px-6 py-8`}>
+              <h2 className="mb-1.5 text-[19px] font-bold text-[#a8322a]">เชื่อมต่อ backend ไม่ได้</h2>
+              <p className="text-mut mb-3">{errMsg}</p>
+              <ul className="list-disc pl-5 text-[14px] text-mut mb-4 space-y-1">
+                <li>เปิด backend ไว้หรือยัง (<code>cd backend</code> แล้ว <code>npm run dev</code>)</li>
+                <li>ลองเปิด <code>http://localhost:4000/api/health</code> ต้องเห็น {'{"api":"ok","database":"ok"}'}</li>
+                <li>แก้ <code>vite.config.js</code> แล้ว ต้องรีสตาร์ต <code>npm run dev</code> ฝั่ง frontend ด้วย</li>
+              </ul>
+              <button className={btnPrimary} onClick={() => { setStatus('loading'); loadAll() }}>ลองใหม่</button>
+            </div>
+          )}
+
+          {empty && (
+            <div className={`${card} bg-white px-6 py-10 text-center`}>
+              <h2 className="mb-1.5 text-[19px] font-bold">ยังไม่มีรายการเวชภัณฑ์</h2>
+              <p className="text-mut">กด “เพิ่มรายการเวชภัณฑ์” แล้วใส่รหัสยา ระบบจะดึงชื่อ หน่วย และราคามาให้ จากนั้นกรอก Lot จำนวน และวันหมดอายุ</p>
+              <div className="flex items-center justify-center gap-2.5 flex-wrap pt-1.5">
+                <button className={btnPrimary} onClick={() => setAdding(true)}>+ เพิ่มรายการเวชภัณฑ์</button>
+              </div>
+            </div>
+          )}
+
+          {T('dash') && <DashboardPage d={d} />}
+
+          {T('inv') && <InventoryPage d={d} />}
+
+          {T('use') && <UsagePage d={d} />}
+
+          {T('alert') && <AlertsPage d={d} />}
+        </main>
+        <footer className="flex justify-between flex-wrap gap-2 px-6 py-4 bg-white border-t border-line text-mut text-[13px] print:hidden"><span>© 2569 โรงพยาบาลกรุงเทพสิริโรจน์ (Bangkok Hospital Siriroj)</span><span>ฝ่ายเภสัชกรรม คลินิกเครือข่ายภูเก็ต</span></footer>
+      </div>
+
+      {adding && <AddItemModal form={form} F={F} master={master} checking={checking} sugg={sugg} dup={dup} formOk={formOk} addItem={addItem} onClose={() => setAdding(false)} />}
+
+      {showCfg && <SettingsModal draft={draft} setDraft={setDraft} setC={setC} dirty={dirty} err={err} save={save} saved={saved} setSaved={setSaved} onClose={() => setShowCfg(false)} />}
+
+      {toast && <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-30 rounded-xl bg-[#0a1a4a] px-5 py-3 text-sm text-white shadow-card">{toast}</div>}
+
+      <Drawer r={all.find((r) => r.key === sel)} onClose={() => setSel(null)} />
+    </div>
+  )
+}

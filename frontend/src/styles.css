@@ -1,0 +1,29 @@
+@import "tailwindcss";
+
+/* โทเคนสี/เงา เดิมจาก :root ของ CSS เก่า → ใช้เป็น utility เช่น bg-accent, text-mut, border-line, shadow-card */
+@theme {
+  --font-sans: 'IBM Plex Sans Thai', system-ui, sans-serif;
+
+  --color-bg: #f3f6f8;
+  --color-ink: #1c2733;
+  --color-mut: #7a8794;
+  --color-mut2: #9aa5b1;
+  --color-line: #e8ecf0;
+  --color-head: #f6f9fb;
+  --color-accent: #14307a;
+  --color-accent-soft: #e4e9f6;
+  --color-dk: #5c0b0b;
+  --color-rd: #b42318;
+  --color-or: #d4690a;
+  --color-pu: #6a58cf;
+  --color-gr: #6b7a89;
+
+  --shadow-card: 0 1px 2px rgba(20, 35, 50, .04), 0 4px 16px rgba(20, 35, 50, .06);
+  --shadow-lift: 0 2px 4px rgba(20, 35, 50, .06), 0 10px 24px rgba(20, 35, 50, .10);
+}
+
+@layer base {
+  body {
+    @apply bg-bg font-sans text-[15px] leading-[1.55] text-ink antialiased;
+  }
+}
