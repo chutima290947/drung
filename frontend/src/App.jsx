@@ -11,9 +11,10 @@ import DashboardPage from './pages/DashboardPage.jsx'
 import InventoryPage from './pages/InventoryPage.jsx'
 import UsagePage from './pages/UsagePage.jsx'
 import AlertsPage from './pages/AlertsPage.jsx'
+import PrintReport from './components/PrintReport.jsx'
 import { card, btnGhost, btnPrimary } from './classes.js'
 
-const EMPTY_FORM = { code: '', clinic: CLINICS[0], qty: '', lot: '', exp: '' }
+const EMPTY_FORM = { type: 'drug', code: '', name: '', unit: '', price: '', clinic: CLINICS[0], qty: '', lot: '', exp: '' }
 
 
 export default function App() {
@@ -29,7 +30,9 @@ export default function App() {
   const [status, setStatus] = useState('loading') // loading | ok | error
   const [errMsg, setErrMsg] = useState('')
   const [toast, setToast] = useState('')
-  const [master, setMaster] = useState(null)
+  const [lookup, setLookup] = useState(null)
+  const [kind, setKind] = useState('all') // all | drug | supply
+  const [picked, setPicked] = useState(() => new Set())
   const [checking, setChecking] = useState(false)
   const [sugg, setSugg] = useState([])
   const [sel, setSel] = useState(null)
@@ -56,7 +59,7 @@ export default function App() {
         if (u.note) nn[`${n}|${u.drug_code}`] = u.note
       })
       const L = rowsL.filter((r) => byCode[r.clinic_code]).map((r) => {
-        drugMap[r.drug_code] = { code: r.drug_code, name: r.drug_name, unit: r.unit, price: Number(r.unit_price) }
+        drugMap[r.drug_code] = { code: r.drug_code, name: r.drug_name, unit: r.unit, price: Number(r.unit_price), type: r.item_type || 'drug' }
         const c = byCode[r.clinic_code]
         if (r.note) nn[`${c}|${r.lot_no}`] = r.note
         return { id: r.id, clinic: c, code: r.drug_code, lot: r.lot_no, qty: r.qty, exp: String(r.expiry_date).slice(0, 10) }
@@ -66,18 +69,24 @@ export default function App() {
   }, [])
   useEffect(() => { loadAll() }, [loadAll])
 
-  // ค้นรหัสยาจากฐานข้อมูลตอนพิมพ์ (ไม่ดึงทั้งหมด)
+  // ค้นรหัสจากฐานข้อมูลตอนพิมพ์ (ไม่ดึงทั้งหมด) — ยา: ดึงอัตโนมัติ / เวชภัณฑ์: ถ้าเคยกรอกไว้จะเติมให้
   useEffect(() => {
     const c = form.code.trim().toUpperCase()
-    if (!c) { setMaster(null); setSugg([]); setChecking(false); return }
+    setLookup(null)
+    if (!c) { setSugg([]); setChecking(false); return }
     setChecking(true)
     const t = setTimeout(async () => {
-      try { const d = await api.drug(c); setMaster({ code: d.code, name: d.name, unit: d.unit, price: Number(d.unit_price) }) } catch { setMaster(null) }
+      try {
+        const d = await api.drug(c)
+        const L = { code: d.code, name: d.name, unit: d.unit, price: Number(d.unit_price), type: d.item_type || 'drug' }
+        setLookup(L)
+        if (L.type === 'supply') setForm((f) => (f.type === 'supply' && f.code.trim().toUpperCase() === L.code ? { ...f, name: L.name, unit: L.unit, price: String(L.price) } : f))
+      } catch { setLookup(null) }
       setChecking(false)
-      api.drugs(c).then(setSugg).catch(() => setSugg([]))
+      api.drugs(c, form.type).then(setSugg).catch(() => setSugg([]))
     }, 250)
     return () => clearTimeout(t)
-  }, [form.code])
+  }, [form.code, form.type])
 
   // หมายเหตุ: พิมพ์แล้วหน่วงนิดหนึ่งค่อยบันทึกลงฐานข้อมูล
   const saveNote = (key, text) => {
@@ -95,12 +104,22 @@ export default function App() {
 
   const all = useMemo(() => summarize(lots, cfg), [lots, cfg])
   const rowMap = useMemo(() => Object.fromEntries(all.map((r) => [r.key, r])), [all])
+  const allK = useMemo(() => all.filter((r) => kind === 'all' || (r.drug.type || 'drug') === kind), [all, kind])
   const rows = useMemo(
-    () => all.filter((r) => (clinic === 'all' || r.clinic === clinic) && (r.drug.name + r.drug.code).toLowerCase().includes(q.toLowerCase())),
-    [all, clinic, q]
+    () => allK.filter((r) => (clinic === 'all' || r.clinic === clinic) && (r.drug.name + r.drug.code).toLowerCase().includes(q.toLowerCase())),
+    [allK, clinic, q]
   )
   const lotRows = rows.flatMap((r) => r.lots.map((l) => ({ ...l, drug: r.drug, key: r.key })))
     .sort((a, b) => new Date(a.exp) - new Date(b.exp))
+  const invRows = fs === 'all' ? lotRows : fs === 'soon' ? lotRows.filter((l) => l.status === 'red' || l.status === 'orange') : lotRows.filter((l) => l.status === fs)
+  const pickToggle = (id) => setPicked((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n })
+  const pickMany = (ids, on) => setPicked((p) => { const n = new Set(p); ids.forEach((i) => (on ? n.add(i) : n.delete(i))); return n })
+  const clearPick = () => setPicked(new Set())
+  const reportRows = picked.size ? lotRows.filter((l) => picked.has(l.id)) : invRows
+  const FS_TITLE = { all: 'ทะเบียนเวชภัณฑ์คงคลัง (ทุกสถานะ)', expired: EXP_LABEL.expired, red: `${EXP_LABEL.red} (≤ ${cfg.redMonths} เดือน)`, orange: `เฝ้าระวัง (≤ ${cfg.orangeMonths} เดือน)`, soon: `รายการใกล้หมดอายุภายใน ${cfg.orangeMonths} เดือน`, ok: 'ปกติ (ระยะปลอดภัย)' }
+  const reportTitle = picked.size ? `รายการที่เลือก (${picked.size} รายการ)` : FS_TITLE[fs]
+  const scope = kind === 'drug' ? 'เฉพาะยา' : kind === 'supply' ? 'เฉพาะเวชภัณฑ์' : 'ยาและเวชภัณฑ์'
+  const printReport = () => window.print()
   const by = (s) => lotRows.filter((l) => l.status === s)
   const cnt = (s) => by(s).length
   const qty = (s) => by(s).reduce((a, l) => a + l.qty, 0)
@@ -112,7 +131,7 @@ export default function App() {
 
   // สถิติรายคลินิก (ไม่ขึ้นกับตัวกรอง)
   const stat = CLINICS.map((c) => {
-    const r = all.filter((x) => x.clinic === c), ls = r.flatMap((x) => x.lots)
+    const r = allK.filter((x) => x.clinic === c), ls = r.flatMap((x) => x.lots)
     const n = (s) => ls.filter((l) => l.status === s).length
     return { c, items: r.length, ex: n('expired'), rd: n('red'), or: n('orange'), os: r.filter((x) => x.overstock && !x.noMove).length,
       nm: r.filter((x) => x.noMove).length, val: r.reduce((a, x) => a + x.value, 0), use: r.reduce((a, x) => a + x.avg, 0) }
@@ -122,14 +141,21 @@ export default function App() {
   const busy = [...stat].filter((s) => s.c !== risk.c).sort((a, b) => b.use - a.use)[0]
   const where = (s) => [...new Set(by(s).map((l) => short(l.clinic)))].join(', ') || '—'
 
-  const dup = lots.some((l) => l.clinic === form.clinic && l.lot === form.lot.trim())
-  const formOk = master && +form.qty > 0 && form.lot.trim() && form.exp && !dup
+  const codeU = form.code.trim().toUpperCase()
+  const mismatch = lookup && lookup.type !== form.type
+  const item = form.type === 'drug'
+    ? (lookup && lookup.type === 'drug' ? lookup : null)
+    : (!mismatch && codeU && form.name.trim() && form.unit.trim() && form.price !== '' && +form.price >= 0
+      ? { code: codeU, name: form.name.trim(), unit: form.unit.trim(), price: +form.price, type: 'supply' } : null)
+  const dup = lots.some((l) => l.clinic === form.clinic && l.lot === form.lot.trim() && l.code === codeU)
+  const formOk = !!item && +form.qty > 0 && !!form.lot.trim() && !!form.exp && !dup
   const addItem = async () => {
     if (!formOk) return
     try {
-      await api.addLot({ clinic: short(form.clinic), code: master.code, lot: form.lot.trim(), qty: +form.qty, exp: form.exp })
+      await api.addLot({ clinic: short(form.clinic), code: item.code, lot: form.lot.trim(), qty: +form.qty, exp: form.exp,
+        ...(form.type === 'supply' ? { supply: { name: item.name, unit: item.unit, unit_price: item.price } } : {}) })
       await loadAll()
-      setForm({ ...EMPTY_FORM, clinic: form.clinic }); setAdding(false); notify('เพิ่มรายการแล้ว')
+      setForm({ ...EMPTY_FORM, clinic: form.clinic, type: form.type }); setAdding(false); notify('เพิ่มรายการแล้ว')
     } catch (e) { notify('เพิ่มไม่สำเร็จ: ' + e.message) }
   }
   const del = async (l) => {
@@ -138,9 +164,9 @@ export default function App() {
   }
   const F = (k) => (e) => setForm({ ...form, [k]: e.target.value })
   const exportCsv = () => {
-    const head = ['รหัสยา', 'ยา', 'คลินิก', 'Lot', 'คงเหลือ', 'มูลค่า', 'Exp', 'สถานะ Exp']
-    const body = lotRows.map((l) => [l.code, l.drug.name, l.clinic, l.lot, l.qty, l.qty * l.drug.price, l.exp, EXP_LABEL[l.status] || 'ปกติ'])
-    const csv = '\ufeff' + [head, ...body].map((r) => r.map((v) => `"${v}"`).join(',')).join('\n')
+    const head = ['รหัส', 'รายการ', 'ประเภท', 'คลินิก', 'Lot', 'คงเหลือ', 'หน่วย', 'มูลค่า', 'วันหมดอายุ', 'สถานะ Exp', 'หมายเหตุ']
+    const body = reportRows.map((l) => [l.code, l.drug.name, l.drug.type === 'supply' ? 'เวชภัณฑ์' : 'ยา', l.clinic, l.lot, l.qty, l.drug.unit, l.qty * l.drug.price, l.exp, EXP_LABEL[l.status] || 'ปกติ', notes[`${l.clinic}|${l.lot}`] || ''])
+    const csv = '\ufeff' + [head, ...body].map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n')
     const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = 'drug-inventory.csv'; a.click()
   }
 
@@ -154,9 +180,10 @@ export default function App() {
   }
 
   const titles = { dash: `สรุปภาพรวมคลังเวชภัณฑ์ คลินิก ${CLINICS.length} สาขา`, inv: 'ทะเบียนยาคงคลังแยกตาม Lot', use: 'วิเคราะห์อัตราการใช้ยา', alert: 'แจ้งเตือนเวชภัณฑ์' }
-  const d = { cfg, rows, all, rowMap, lotRows, by, cnt, qty, val, total, stat, sum, risk, busy, where, go, clinic, fs, setFs, uf, setUf, notes, setNotes: setNotesApi, setSel, del }
+  const d = { cfg, rows, all, rowMap, lotRows, by, cnt, qty, val, total, stat, sum, risk, busy, where, go, clinic, fs, setFs, uf, setUf, notes, setNotes: setNotesApi, setSel, del, invRows, picked, pickToggle, pickMany, clearPick, exportCsv, printReport, kind }
   return (
-    <div className="flex min-h-screen print:block">
+    <>
+    <div className="flex min-h-screen print:hidden">
       <Sidebar tab={tab} setTab={setTab} badge={cnt('expired') + cnt('red')} />
 
       <div className="flex-1 min-w-0 flex flex-col">
@@ -165,6 +192,11 @@ export default function App() {
         <main className="px-6 pt-[22px] pb-9 flex-1 max-[1000px]:px-3 max-[1000px]:pt-4 max-[1000px]:pb-4">
           <div className="flex justify-between items-center flex-wrap gap-2.5 mb-[18px]">
             <div><h2 className="text-[22px] font-semibold">{titles[tab]}</h2>{tab !== 'dash' && <small className="text-mut">{clinic === 'all' ? `ทุกคลินิก (${CLINICS.length} สาขา)` : clinic}</small>}</div>
+            <div className="inline-flex rounded-xl bg-[#e9edf1] p-[3px] print:hidden">
+              {[['all', 'ทั้งหมด'], ['drug', 'ยา'], ['supply', 'เวชภัณฑ์']].map(([k, l]) => (
+                <button key={k} onClick={() => setKind(k)} className={`px-4 py-1.5 rounded-[9px] text-[13.5px] cursor-pointer border-0 ${kind === k ? 'bg-white text-accent font-semibold shadow-card' : 'bg-transparent text-mut'}`}>{l}</button>
+              ))}
+            </div>
           </div>
 
           {status === 'loading' && <div className="py-20 text-center text-mut">กำลังโหลดข้อมูลจากฐานข้อมูล...</div>}
@@ -202,7 +234,7 @@ export default function App() {
         <footer className="flex justify-between flex-wrap gap-2 px-6 py-4 bg-white border-t border-line text-mut text-[13px] print:hidden"><span>© 2569 โรงพยาบาลกรุงเทพสิริโรจน์ (Bangkok Hospital Siriroj)</span><span>ฝ่ายเภสัชกรรม คลินิกเครือข่ายภูเก็ต</span></footer>
       </div>
 
-      {adding && <AddItemModal form={form} F={F} master={master} checking={checking} sugg={sugg} dup={dup} formOk={formOk} addItem={addItem} onClose={() => setAdding(false)} />}
+      {adding && <AddItemModal form={form} F={F} setForm={setForm} lookup={lookup} checking={checking} sugg={sugg} item={item} dup={dup} formOk={formOk} addItem={addItem} onClose={() => setAdding(false)} />}
 
       {showCfg && <SettingsModal draft={draft} setDraft={setDraft} setC={setC} dirty={dirty} err={err} save={save} saved={saved} setSaved={setSaved} onClose={() => setShowCfg(false)} />}
 
@@ -210,5 +242,7 @@ export default function App() {
 
       <Drawer r={all.find((r) => r.key === sel)} onClose={() => setSel(null)} />
     </div>
+    <PrintReport rows={reportRows} title={reportTitle} clinic={clinic} scope={scope} notes={notes} />
+    </>
   )
 }

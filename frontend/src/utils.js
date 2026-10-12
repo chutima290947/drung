@@ -31,14 +31,15 @@ export function summarize(lots, cfg) {
   })
   return Object.values(map).map((r) => {
     const u = USAGE[r.key] ?? { out30: 0, out90: 0, out180: 0 }
-    const out = u[`out${cfg.window}`] ?? u.out90
+    const tracked = (r.drug.type || 'drug') !== 'supply' // เวชภัณฑ์กรอกเอง ไม่มีข้อมูลการจ่าย จึงไม่วิเคราะห์การใช้
+    const out = tracked ? (u[`out${cfg.window}`] ?? u.out90) : 0
     const avg = out / cfg.window
     const coverage = avg > 0 ? r.stock / avg : Infinity
     return {
       ...r, nearest: r.lots.reduce((a, l) => (new Date(l.exp) < new Date(a.exp) ? l : a)), avg, coverage, value: r.stock * r.drug.price,
-      noMove: (u.out30 === 0 && cfg.noMoveDays <= 30) || (u.out90 === 0 && cfg.noMoveDays <= 90) || (u.out180 === 0 && cfg.noMoveDays > 90),
-      overstock: coverage > cfg.overstockDays,
-      low: avg > 0 && coverage < cfg.minDays,
+      tracked, noMove: tracked && ((u.out30 === 0 && cfg.noMoveDays <= 30) || (u.out90 === 0 && cfg.noMoveDays <= 90) || (u.out180 === 0 && cfg.noMoveDays > 90)),
+      overstock: tracked && coverage > cfg.overstockDays,
+      low: tracked && avg > 0 && coverage < cfg.minDays,
       worst: r.lots.reduce((w, l) => (['expired', 'red', 'orange', 'ok'].indexOf(l.status) < ['expired', 'red', 'orange', 'ok'].indexOf(w) ? l.status : w), 'ok'),
     }
   })

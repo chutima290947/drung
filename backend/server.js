@@ -12,9 +12,20 @@ app.use(express.json())
 
 const wrap = (fn) => (req, res) => fn(req, res).catch((e) => { console.error(e); res.status(500).json({ error: e.message }) })
 
+// ค้นหารหัส/ชื่อยาแบบแนะนำ (พิมพ์ไม่กี่ตัวอักษร) — ไม่ดึงทั้งหมด
+app.get('/api/drugs', wrap(async (req, res) => {
+  const q = String(req.query.q || '').trim()
+  if (!q) return res.json([])
+  const { rows } = await pool.query(
+    `SELECT code, name, item_type FROM drugs WHERE active AND ($3::text IS NULL OR item_type = $3)
+     AND (code ILIKE $1 OR name ILIKE $2) ORDER BY code LIMIT 10`,
+    [q + '%', '%' + q + '%', ['drug', 'supply'].includes(req.query.type) ? req.query.type : null])
+  res.json(rows)
+}))
+
 // ดึงชื่อ/หน่วย/ราคา จากรหัสยา (หน้า เพิ่มรายการเวชภัณฑ์)
 app.get('/api/drugs/:code', wrap(async (req, res) => {
-  const { rows } = await pool.query('SELECT code, name, unit, unit_price FROM drugs WHERE code = upper($1) AND active', [req.params.code])
+  const { rows } = await pool.query('SELECT code, name, unit, unit_price, item_type FROM drugs WHERE code = upper($1) AND active', [req.params.code])
   rows[0] ? res.json(rows[0]) : res.status(404).json({ error: 'ไม่พบรหัสยา' })
 }))
 
@@ -29,11 +40,19 @@ app.get('/api/lots', wrap(async (_req, res) => {
 
 // เพิ่ม Lot ใหม่ + บันทึก movement "receive"
 app.post('/api/lots', wrap(async (req, res) => {
-  const { clinic, code, lot, qty, exp } = req.body
+  const { clinic, code, lot, qty, exp, supply } = req.body
   if (!clinic || !code || !lot || !(qty > 0) || !exp) return res.status(400).json({ error: 'ข้อมูลไม่ครบ' })
   const c = await pool.connect()
   try {
     await c.query('BEGIN')
+    if (supply) { // เวชภัณฑ์ที่กรอกเอง: สร้าง/อัปเดตในตารางรายการ แล้วค่อยเพิ่ม Lot
+      if (!supply.name || !supply.unit || !(Number(supply.unit_price) >= 0)) throw Object.assign(new Error('ข้อมูลเวชภัณฑ์ไม่ครบ (ชื่อ/หน่วย/ราคา)'), { http: 400 })
+      const ex = await c.query('SELECT item_type FROM drugs WHERE code = upper($1)', [code])
+      if (ex.rows[0] && ex.rows[0].item_type !== 'supply') throw Object.assign(new Error('รหัสนี้เป็นรหัสยา ไม่ใช่เวชภัณฑ์'), { http: 409 })
+      await c.query(`INSERT INTO drugs (code, name, unit, unit_price, item_type) VALUES (upper($1), $2, $3, $4, 'supply')
+        ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name, unit = EXCLUDED.unit, unit_price = EXCLUDED.unit_price`,
+        [code, supply.name, supply.unit, supply.unit_price])
+    }
     const { rows } = await c.query(
       `INSERT INTO drug_lots (clinic_code, drug_code, lot_no, qty, expiry_date) VALUES ($1, upper($2), $3, $4, $5) RETURNING id`,
       [clinic, code, lot, qty, exp])
@@ -43,7 +62,7 @@ app.post('/api/lots', wrap(async (req, res) => {
     res.status(201).json({ id: rows[0].id })
   } catch (e) {
     await c.query('ROLLBACK')
-    res.status(e.code === '23505' ? 409 : e.code === '23503' ? 400 : 500).json({ error: e.code === '23505' ? 'Lot นี้มีอยู่แล้ว' : e.message })
+    res.status(e.http || (e.code === '23505' ? 409 : e.code === '23503' ? 400 : 500)).json({ error: e.code === '23505' ? 'Lot นี้มีอยู่แล้ว' : e.message })
   } finally { c.release() }
 }))
 
@@ -83,4 +102,20 @@ app.put('/api/settings', wrap(async (req, res) => {
   res.status(204).end()
 }))
 
-app.listen(process.env.PORT || 4000, () => console.log('API on port', process.env.PORT || 4000))
+// ตรวจว่า API + ฐานข้อมูลทำงานอยู่ไหม (เปิดในเบราว์เซอร์: /api/health)
+app.get('/api/health', wrap(async (_req, res) => {
+  await pool.query('SELECT 1')
+  res.json({ api: 'ok', database: 'ok' })
+}))
+
+const port = process.env.PORT || 4000
+const server = app.listen(port, '0.0.0.0', () => {
+  console.log(`API พร้อมแล้ว: http://localhost:${port}/api/health`)
+  pool.query('SELECT now()')
+    .then(() => console.log('✅ เชื่อมต่อฐานข้อมูลสำเร็จ'))
+    .catch((e) => console.error('❌ เชื่อมต่อฐานข้อมูลไม่ได้:', e.message, '\n   ตรวจ DATABASE_URL ในไฟล์ .env'))
+})
+server.on('error', (e) => {
+  console.error(e.code === 'EADDRINUSE' ? `❌ พอร์ต ${port} ถูกใช้อยู่แล้ว (อาจเปิด API ค้างไว้อีกหน้าต่าง)` : e)
+  process.exit(1)
+})

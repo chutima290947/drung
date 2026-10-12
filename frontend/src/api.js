@@ -14,7 +14,7 @@ export const api = {
   lots: () => req('/lots'),
   usage: () => req('/usage'),
   drug: (code) => req('/drugs/' + encodeURIComponent(code)),
-  drugs: (q) => req('/drugs?q=' + encodeURIComponent(q)),
+  drugs: (q, type) => req('/drugs?q=' + encodeURIComponent(q) + (type ? '&type=' + type : '')),
   addLot: (b) => req('/lots', { method: 'POST', ...body(b) }),
   delLot: (id) => req('/lots/' + id, { method: 'DELETE' }),
   noteLot: (id, note) => req('/notes/lot/' + id, { method: 'PUT', ...body({ note }) }),

@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS drugs (
   name       text NOT NULL,
   unit       text NOT NULL,
   unit_price numeric(12,2) NOT NULL CHECK (unit_price >= 0),
+  item_type  text NOT NULL DEFAULT 'drug' CHECK (item_type IN ('drug','supply')), -- drug = ยา, supply = เวชภัณฑ์ (กรอกเอง)
   active     boolean NOT NULL DEFAULT true
 );
 
@@ -83,7 +84,7 @@ SELECT l.id, l.clinic_code, c.name AS clinic_name, l.drug_code, d.name AS drug_n
             WHEN l.expiry_date <= CURRENT_DATE + make_interval(months => s.red)    THEN 'red'
             WHEN l.expiry_date <= CURRENT_DATE + make_interval(months => s.orange) THEN 'orange'
             ELSE 'ok' END               AS status,
-       n.note
+       n.note, d.item_type
 FROM drug_lots l
 JOIN clinics c ON c.code = l.clinic_code
 JOIN drugs   d ON d.code = l.drug_code

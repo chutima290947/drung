@@ -53,7 +53,7 @@ export default function UsagePage({ d }) {
               <tr key={r.key} className={`cursor-pointer ${ROW[r.worst]}`} onClick={() => setSel(r.key)}>
                 <Td>{r.drug.name}<div className="text-xs text-mut leading-[1.3]">{r.drug.code}</div></Td>{clinic === 'all' && <Td>{r.clinic}</Td>}
                 <Td n>{fmt(r.stock)}</Td><Td n>{fmt(u(r).used)}</Td>
-                <Td n>{u(r).avg ? fmt(u(r).avg, 2) : '—'}</Td><Td n>{u(r).cv === Infinity ? <span className="text-mut">ไม่มีการใช้</span> : cov(u(r).cv)}</Td>
+                <Td n>{u(r).avg ? fmt(u(r).avg, 2) : '—'}</Td><Td n>{r.tracked === false ? <span className="text-mut">ไม่ติดตาม</span> : u(r).cv === Infinity ? <span className="text-mut">ไม่มีการใช้</span> : cov(u(r).cv)}</Td>
                 <Td className="font-bold text-[15.5px]"><div>{thDate(r.nearest.exp)}{r.worst === 'expired' && <span className={pillCls('expired', { small: true })}>{EXP_LABEL.expired}</span>}</div><div className="text-xs text-mut leading-[1.3] font-normal">{r.nearest.lot} · เหลือ {dayTxt(r.nearest.exp)}</div></Td>
                 <Td>{r.noMove || r.overstock || r.low ? <Flags r={r} /> : <span className="text-mut">ปกติ</span>}</Td>
                 <Td onClick={(e) => e.stopPropagation()}><input className={noteInput} placeholder="+ หมายเหตุ" value={notes[r.key] || ''} onChange={(e) => setNotes({ ...notes, [r.key]: e.target.value })} /></Td>
