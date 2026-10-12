@@ -31,7 +31,7 @@ export default function App() {
   const [errMsg, setErrMsg] = useState('')
   const [toast, setToast] = useState('')
   const [lookup, setLookup] = useState(null)
-  const [kind, setKind] = useState('all') // all | drug | supply
+  const [kind, setKind] = useState('drug') // drug | supply (เริ่มที่ยาเสมอ)
   const [picked, setPicked] = useState(() => new Set())
   const [checking, setChecking] = useState(false)
   const [sugg, setSugg] = useState([])
@@ -126,7 +126,8 @@ export default function App() {
   const val = (s) => by(s).reduce((a, l) => a + l.qty * l.drug.price, 0)
   const total = rows.reduce((a, r) => a + r.value, 0)
   const empty = status === 'ok' && lots.length === 0
-  const T = (k) => status === 'ok' && !empty && tab === k
+  const noKind = status === 'ok' && lots.length > 0 && allK.length === 0 // ยังไม่มีรายการของประเภทที่เลือก
+  const T = (k) => status === 'ok' && !empty && !noKind && tab === k
   const go = (t, o = {}) => { setTab(t); if (o.c) setClinic(o.c); if (o.f) setFs(o.f); if (o.u) setUf(o.u) }
 
   // สถิติรายคลินิก (ไม่ขึ้นกับตัวกรอง)
@@ -155,7 +156,7 @@ export default function App() {
       await api.addLot({ clinic: short(form.clinic), code: item.code, lot: form.lot.trim(), qty: +form.qty, exp: form.exp,
         ...(form.type === 'supply' ? { supply: { name: item.name, unit: item.unit, unit_price: item.price } } : {}) })
       await loadAll()
-      setForm({ ...EMPTY_FORM, clinic: form.clinic, type: form.type }); setAdding(false); notify('เพิ่มรายการแล้ว')
+      setKind(form.type); setForm({ ...EMPTY_FORM, clinic: form.clinic, type: form.type }); setAdding(false); notify('เพิ่มรายการแล้ว')
     } catch (e) { notify('เพิ่มไม่สำเร็จ: ' + e.message) }
   }
   const del = async (l) => {
@@ -187,13 +188,13 @@ export default function App() {
       <Sidebar tab={tab} setTab={setTab} badge={cnt('expired') + cnt('red')} />
 
       <div className="flex-1 min-w-0 flex flex-col">
-        <TopBar clinic={clinic} setClinic={setClinic} q={q} setQ={setQ} onSettings={() => { setDraft(cfg); setSaved(false); setShowCfg(true) }} onAdd={() => setAdding(true)} />
+        <TopBar clinic={clinic} setClinic={setClinic} q={q} setQ={setQ} onSettings={() => { setDraft(cfg); setSaved(false); setShowCfg(true) }} onAdd={() => { setForm((f) => ({ ...f, type: kind })); setAdding(true) }} />
 
         <main className="px-6 pt-[22px] pb-9 flex-1 max-[1000px]:px-3 max-[1000px]:pt-4 max-[1000px]:pb-4">
           <div className="flex justify-between items-center flex-wrap gap-2.5 mb-[18px]">
             <div><h2 className="text-[22px] font-semibold">{titles[tab]}</h2>{tab !== 'dash' && <small className="text-mut">{clinic === 'all' ? `ทุกคลินิก (${CLINICS.length} สาขา)` : clinic}</small>}</div>
             <div className="inline-flex rounded-xl bg-[#e9edf1] p-[3px] print:hidden">
-              {[['all', 'ทั้งหมด'], ['drug', 'ยา'], ['supply', 'เวชภัณฑ์']].map(([k, l]) => (
+              {[['drug', 'ยา'], ['supply', 'เวชภัณฑ์']].map(([k, l]) => (
                 <button key={k} onClick={() => setKind(k)} className={`px-4 py-1.5 rounded-[9px] text-[13.5px] cursor-pointer border-0 ${kind === k ? 'bg-white text-accent font-semibold shadow-card' : 'bg-transparent text-mut'}`}>{l}</button>
               ))}
             </div>
@@ -210,6 +211,14 @@ export default function App() {
                 <li>แก้ <code>vite.config.js</code> แล้ว ต้องรีสตาร์ต <code>npm run dev</code> ฝั่ง frontend ด้วย</li>
               </ul>
               <button className={btnPrimary} onClick={() => { setStatus('loading'); loadAll() }}>ลองใหม่</button>
+            </div>
+          )}
+
+          {noKind && (
+            <div className={`${card} bg-white px-6 py-10 text-center`}>
+              <h2 className="mb-1.5 text-[19px] font-bold">ยังไม่มี{kind === 'supply' ? 'เวชภัณฑ์' : 'ยา'}ในระบบ</h2>
+              <p className="text-mut mb-4">{kind === 'supply' ? 'เวชภัณฑ์ต้องกรอกข้อมูลเอง กดปุ่มด้านล่างเพื่อเพิ่มรายการแรก' : 'กดปุ่มด้านล่างเพื่อเพิ่มรายการยา'}</p>
+              <button className={btnPrimary} onClick={() => { setForm((f) => ({ ...f, type: kind })); setAdding(true) }}>+ เพิ่มรายการเวชภัณฑ์</button>
             </div>
           )}
 

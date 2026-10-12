@@ -16,7 +16,6 @@ export default function InventoryPage({ d }) {
       <Chips v={fs} set={setFs} items={[['all', `ทั้งหมด (${lotRows.length})`], ['expired', `หมดอายุห้ามใช้ (${cnt('expired')})`], ['red', `ใกล้หมดอายุ (${cnt('red')})`], ['orange', `เฝ้าระวัง (${cnt('orange')})`], ['soon', `ใกล้หมดอายุ ≤ ${cfg.orangeMonths} เดือน (${cnt('red') + cnt('orange')})`], ['ok', `ปกติ (${cnt('ok')})`]]} />
       <div className="flex items-center gap-2.5 flex-wrap mb-3.5 print:hidden">
         <button className={btnPrimary} onClick={printReport}>🖨 พิมพ์รายงาน ({picked.size ? `เลือก ${picked.size}` : `ที่แสดง ${invRows.length}`})</button>
-        <button className={btnGhost} onClick={exportCsv}>⬇ ส่งออก CSV</button>
         {picked.size > 0 && <button className={btnGhost} onClick={clearPick}>ล้างการเลือก</button>}
         <span className="text-[13px] text-mut">ติ๊กเลือกแถวที่ต้องการ หรือไม่เลือกเลยเพื่อพิมพ์ทุกแถวที่แสดงอยู่</span>
       </div>
